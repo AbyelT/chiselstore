@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+
+
 /// Errors encountered in the store layer.
 #[derive(Error, Debug)]
 pub enum StoreError {
@@ -12,3 +14,4 @@ pub enum StoreError {
     #[error("Node is not a leader")]
     NotLeader,
 }
+

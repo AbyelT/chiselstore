@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print!("gouge=# ");
     std::io::stdout().flush().unwrap();
     while let Some(line) = lines.next_line().await? {
-        let addr = "http://127.0.0.1:50001";
+        let addr = "http://127.0.0.1:50002";
         let mut client = RpcClient::connect(addr).await?;
         let query = tonic::Request::new(Query {
             sql: line.to_string(),

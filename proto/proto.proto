@@ -2,68 +2,233 @@ syntax = "proto3";
 
 package proto;
 
+// Empty message
 message Void {
 }
 
+// Type of Sql query
 enum Consistency {
     STRONG = 0;
     RELAXED_READS = 1;
 }
 
+// SQLite query message
 message Query {
     string sql = 1;
     Consistency consistency = 2;
 }
 
+// Query result
 message QueryResults {
     repeated QueryRow rows = 1;
 }
 
+// A string containing the Sql query
 message QueryRow {
     repeated string values = 1;
 }
 
-message VoteRequest {
-    uint64 from_id = 1;
-    uint64 term = 2;
-    uint64 last_log_index = 3;
-    uint64 last_log_term = 4;
+/** OMNI PAXOS RPC messages */
+/// Basic structs
+
+// Ballot, used in sequence consensus and ble
+message RPCBallot {
+    uint32 n = 1;
+    uint64 priority = 2;
+    uint64 pid = 3;
 }
 
-message VoteResponse {
-    uint64 from_id = 1;
-    uint64 term = 2;
-    bool vote_granted = 3;
-}
-
-message AppendEntriesRequest {
-    uint64 from_id = 1;
-    uint64 term = 2;
-    uint64 prev_log_index = 3;
-    uint64 prev_log_term = 4;
-    repeated LogEntry entries = 5;
-    uint64 commit_index = 6;
-}
-
-message LogEntry {
+// A single entry in the log
+message RPCEntry {
     uint64 id = 1;
     string sql = 2;
-    uint64 index = 3;
-    uint64 term = 4;
 }
 
-message AppendEntriesResponse {
-    uint64 from_id = 1;
-    uint64 term = 2;
-    bool success = 3;
-    uint64 last_index = 4;
-    optional uint64 mismatch_index = 5;
+// Object used for syncronisation. Could be a suffix/prefix, a snaphot or Nothing
+message RPCSyncItem {
+    oneof item {
+        RPCEntries entries = 1;
+        Snapshot snapshot = 2;
+        None none = 3;
+    }
+    message RPCEntries {
+        repeated RPCEntry e = 1;
+    }
+    enum Snapshot {
+        Complete = 0;
+        Delta = 1;
+        Phantom = 2;
+    }
+    message None {}
 }
 
+
+// Stopsign message
+message RPCStopSign {
+    uint32 config_id = 1;
+    repeated uint64 nodes = 2;
+    optional RPCMetadata metadata = 3;
+}
+
+// Used in stopsign
+message RPCMetadata {
+    repeated uint32 data = 1;
+}
+
+// Type of snapshot
+message RPCSnapshotType {
+    string t = 1;
+    map<uint64, string> s = 2;
+}
+
+// A placeholder for phantom data
+message RPCPhatomData {
+    string phantom = 1;
+}
+
+/** Sequence paxos protocol messages */
+/// Prepare message sent by leader to initiate the Prepare phase.
+message RPCPrepare {
+    RPCBallot n = 1;
+    uint64 ld = 2;
+    RPCBallot n_accepted = 3;
+    uint64 la = 4;
+}
+
+/// Promise message sent by a follower in response to a [`Prepare`] from leader
+message RPCPromise {
+    RPCBallot n = 1;
+    RPCBallot n_accepted = 2;
+    optional RPCSyncItem sync_item = 3;
+    uint64 ld = 4;
+    uint64 la = 5;
+    optional RPCStopSign ss = 6;
+}
+
+/// AcceptSync message is sent by the leader to synchronize the logs of all followers during prepare phase.
+message RPCAcceptSync {
+    RPCBallot n = 1;
+    RPCSyncItem sync_item = 2;
+    uint64 sync_idx = 3;
+    optional uint64 decide_idx = 4;
+    optional RPCStopSign ss = 5;
+}
+
+/// The first Accept message sent. Only used by a pre-elected leader after each reconfiguration.
+message RPCFirstAccept {
+    RPCBallot n = 1;
+    repeated RPCEntry entries = 2; 
+}
+
+/// AcceptDecide Message, with entries to be replicated and the latest decided index sent by the leader in the accept phase.
+message RPCAcceptDecide {
+    RPCBallot n = 1;
+    uint64 ld = 2;
+    repeated RPCEntry entries = 3; 
+}
+
+/// Accepted message sent by followers to leader when entries has been accepted.
+message RPCAccepted {
+    RPCBallot n = 1;
+    uint64 la = 2;
+}
+
+/// Message sent by leader to followers to decide up to a certain index in the log.
+message RPCDecide {
+    RPCBallot n = 1;
+    uint64 ld = 2;
+}
+
+/// Message sent by leader to followers to accept a StopSign
+message RPCAcceptStopSign {
+    RPCBallot n = 1;
+    RPCStopSign ss = 2;
+}
+
+/// Message sent by followers to leader when a StopSign is accepted 
+message RPCAcceptedStopSign {
+    RPCBallot n = 1;
+}
+
+/// Message sent by leader to decide a StopSign
+message RPCDecideStopSign {
+    RPCBallot n = 1;
+}
+
+// Compaction message, used to avoid letting the replicated log grow infinitely large
+// either by trimming away decided entries until a decided index or by snapshotting
+message RPCCompaction {
+    oneof compact {
+        Trim t = 1;
+        Snapshot s = 2;
+    }
+    enum Snapshot {
+        Complete = 0;
+        Delta = 1;
+        Phantom = 2;
+    }
+    message Trim {
+        optional uint64 trim = 1;
+    }
+} 
+
+// Message for follower to forward their proposals to leader
+message RPCProposalForward {
+    repeated RPCEntry pf = 1;
+}
+
+// Follower requests a Prepare message from leader, for fail-recovery
+message RPCPrepareRequest {
+}
+
+/// An enum for all the different message types sent between replicas
+message RPCMessage {
+    uint64 from = 15;
+    uint64 to = 16;
+    oneof msg {
+        RPCPrepareRequest prepareReq = 1;
+        RPCPrepare prepare = 2;
+        RPCPromise promise = 3;
+        RPCAcceptSync acceptsync = 4;
+        RPCFirstAccept Firstaccept = 5;
+        RPCAcceptDecide acceptdecide = 6;
+        RPCAccepted accepted = 7;
+        RPCDecide decide = 8;
+        RPCProposalForward proposalforward = 9; 
+        RPCCompaction compaction = 10;
+        RPCCompaction ForwardCompaction = 11;
+        RPCAcceptStopSign acceptsSS = 12;
+        RPCAcceptedStopSign acceptedSS = 13;
+        RPCDecideStopSign decidedSS = 14;
+    }
+}
+
+/** BLE*/
+// A message carrying a BLE heartbeat request or reply
+message RPCBlemessage {
+    uint64 from = 1;
+    uint64 to = 2;
+    oneof msg {
+        RPCHeartbeatRequest heartbeatrequest = 3;
+        RPCHeartbeatReply heartbeatreply = 4;
+    }
+}
+
+// A requests a reply from all the other replicas.
+message RPCHeartbeatRequest {
+    uint32 round = 1;
+}
+
+// A reply to hearbeat request
+message RPCHeartbeatReply {
+    uint32 round = 1;
+    RPCBallot ballot = 2;
+    bool majority_connected = 3;
+}
+
+// Defines an RPC service interface for replicas to send and receiveA messages
 service RPC {
-    rpc Execute(Query) returns (QueryResults);
-    rpc Vote(VoteRequest) returns (Void);
-    rpc RespondToVote(VoteResponse) returns (Void);
-    rpc AppendEntries(AppendEntriesRequest) returns (Void);
-    rpc RespondToAppendEntries(AppendEntriesResponse) returns (Void);
+    rpc Execute(Query) returns (QueryResults); 
+    rpc HandleSPMessage(RPCMessage) returns (Void);
+    rpc HandleBLEMessage(RPCBlemessage) returns (Void);   
 }
